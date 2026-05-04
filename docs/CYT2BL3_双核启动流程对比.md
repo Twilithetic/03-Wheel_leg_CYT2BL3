@@ -1,18 +1,19 @@
-# 双核 ARM 芯片启动流程对比
+# 双核（及多核）芯片启动流程对比
 
 > *"其他双核芯片和 CYT2BL3 有什么不同？"*
-> RP2040 vs STM32H7 vs LPC55 vs CYT2BL3
+> RP2040 vs STM32H7 vs LPC55 vs ESP32-S3 vs CYT2BL3
 
 ---
 
 ## 一、四款双核芯片速览
 
-| 芯片 | 核 1 | 核 2 | 架构 | probe-rs |
-|------|------|------|------|:---:|
-| **RP2040** | M0+ | M0+ | 对称 | ✅ |
-| **STM32H7** | M7 | M4 | 非对称 | ✅ |
-| **LPC55** | M33 | M33 | 对称 | ✅ |
-| **CYT2BL3** | M0+ | M4F | **主从** | ❌ |
+| 芯片 | 核 1 | 核 2 | ISA | 架构 | 调试接口 | probe-rs |
+|------|------|------|-----|------|----------|:---:|
+| **RP2040** | M0+ | M0+ | ARMv6-M | 对称 | SWD | ✅ |
+| **STM32H7** | M7 | M4 | ARMv7-M | 非对称 | SWD/JTAG | ✅ |
+| **LPC55** | M33 | M33 | ARMv8-M | 对称 | SWD | ✅ |
+| **ESP32-S3** | Xtensa LX7 | Xtensa LX7 | Xtensa | 对称 | JTAG | ✅ (v0.31+) |
+| **CYT2BL3** | M0+ | M4F | ARMv6-M/v7-M | **主从** | SWD | ❌ |
 
 ---
 
@@ -108,7 +109,82 @@ SWD 调试:
 
 ---
 
-### 2.4 CYT2BL3 — 严格安保关系 🔐🔫
+### 2.4 ESP32-S3 — 管家模式 🏠
+
+```
+上电
+ │
+ ▼
+只有 PRO CPU 启动！APP CPU 在复位中！⚠️
+
+  PRO CPU 执行 Mask ROM (不可修改)
+    ├── 检查复位原因 (Deep Sleep / 上电 / WDT)
+    ├── 检查 Strapping 引脚 → 确定启动模式
+    │     ├── UART Download Mode (固件下载)
+    │     └── Flash Boot Mode (正常启动)
+    ├── 配置 SPI Flash (基于 eFuse)
+    │
+    ▼
+  First Stage Bootloader (ROM)
+    └── 从 Flash 偏移 0x0 加载 Second Stage Bootloader
+    
+  Second Stage Bootloader (Flash)
+    ├── 读取分区表 (默认偏移 0x8000)
+    ├── 加载主程序镜像到 RAM
+    ├── 配置 Flash MMU (IROM/DROM 映射)
+    ├── 验证镜像完整性
+    │
+    ▼
+   跳转到主程序入口: call_start_cpu0()
+    ├── 初始化 C 运行时 (CRT)
+    ├── 配置 CPU 异常/中断
+    ├── 初始化内存 (data/bss)
+    ├── 配置 MMU Cache / PSRAM
+    ├── 设置 CPU 时钟频率
+    ├── 🔓 de-assert APP CPU 复位
+    │     └── 设置 APP CPU 入口地址
+    │     └── 等待 APP CPU 就绪标志
+    │     └── ⚠️ 此时 APP CPU 已被释放，但只在等待！
+    │
+    ▼
+  start_cpu0() (系统层初始化)
+    ├── 日志、堆分配器、libc
+    ├── SPI Flash API、安全 eFuse 检查
+    ├── 创建 main_task
+    └── 启动 FreeRTOS 调度器  ← 💡 这是 ESP-IDF 软件的选择！
+    
+  APP CPU 启动: call_start_cpu1()
+    ├── 自己的端口层初始化
+    ├── 等待 PRO CPU 启动 FreeRTOS 调度器
+    └── 收到调度器中断 → 开始运行任务
+
+JTAG 调试:
+  ⚠️ 复位后只有 PRO CPU 可达 (APP CPU 在复位中)
+  ⚠️ 需等 PRO CPU 释放 APP CPU 后才能调试第二个核
+  ✅ 内置 USB-JTAG-Serial (无需外置调试器)
+  ✅ ESP-IDF 自带 OpenOCD 配置
+  ✅ probe-rs v0.31+ 已支持 Xtensa 架构 (含 ESP32-S3)
+```
+
+```
+特点:
+  ✅ 两个 Xtensa LX7 核心对称 (同架构，非异构)
+  ⚠️ PRO CPU 主控启动流程 (APP CPU 被动等释放)
+  ⚠️ 启动时 APP CPU 不可调试 → 和 CYT2BL3 一样！
+  ✅ 有 Secure Boot V2 + Flash Encryption (IoT 级安全)
+  ✅ 内置 USB-JTAG，调试不需要额外硬件
+  ✅ 启动流程由 ESP-IDF 框架管理
+  💡 FreeRTOS 是 ESP-IDF 的软件选择，不是硬件强制的！
+     call_start_cpu0 中释放 APP CPU 是硬件操作，
+     之后启动 FreeRTOS 调度器是 ESP-IDF 默认行为。
+     裸机代码可以完全不用 FreeRTOS。
+```
+
+> 📚 来源：[ESP-IDF Programming Guide - Application Startup Flow](https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/api-guides/startup.html)
+
+---
+
+### 2.5 CYT2BL3 — 严格安保关系 🔐🔫
 
 ```
 上电
@@ -145,23 +221,27 @@ SWD 调试:
 ### 3.1 一张图看懂
 
 ```
-          RP2040              STM32H7           CYT2BL3
-          ───────             ───────           ───────
+           RP2040           STM32H7         ESP32-S3          CYT2BL3
+           ───────          ───────         ────────          ───────
 
-上电后:   两个核都活着         M7活着 M4可配     只有M0+活着！
-                                         
-Core 1:   休眠(等信号)        被复位(等释放)     被复位(等M0+放)
-          SWD可连 ✅          SWD可连 ✅         SWD不可连 ❌
+上电后:   两个核都活着       M7活着M4可配   只有PRO活着！      只有M0+活着！
+                                       
+辅核状态: 休眠(等信号)      被复位(等释放)   被复位(等释放)     被复位(等M0+放)
+调试可连:  ✅               ✅              ⚠️ (等释放)       ❌ (须验证)
 
-启动方式: Core0发信号         M7写RCC            M0+跑完Boot ROM
-          轻量级              寄存器操作          →Flash Boot
-          ~1μs                ~10μs             →验证签名
-                                                ~10ms！
+启动方式: Core0发信号       M7写RCC          PRO跑完Boot ROM   M0+跑完Boot ROM
+          轻量级            寄存器操作        →call_start_cpu0  →Flash Boot
+          ~1μs              ~10μs           →释放APP CPU       →验证签名
+                                            ~100ms             ~10ms
 
-安全层:   无                  无                 🔐 安全启动
-                                                🔐 SROM API
-                                                🔐 eFuse + DAP限制
-```
+安全层:   无                无               🔐 Secure Boot V2   🔐 安全启动
+                                            🔐 Flash加密        🔐 SROM API
+                                            🔐 eFuse           🔐 eFuse + DAP
+
+架构:     双ARM M0+          ARM M7+M4       双Xtensa LX7       ARM M0+ + M4F
+          对称              非对称           对称               主从(异构+不对等)
+
+probe-rs: ✅                ✅               ✅ (v0.31+)        ❌
 
 ### 3.2 为什么 CYT2BL3 最"重"？
 
@@ -173,6 +253,15 @@ RP2040:
 STM32H7:
   上电 → M7 跑 → 写个寄存器 → M4 跑
   "填个表格就行了"
+
+ESP32-S3:
+  上电 → PRO CPU 跑 ROM → 加载2nd Bootloader
+  → 加载主程序 → call_start_cpu0 → 初始化硬件
+  → 释放 APP CPU (硬件操作) → APP CPU 等待调度器
+  → PRO CPU 继续 init → 启动 FreeRTOS (ESP-IDF 软件选择)
+  → APP CPU 收到中断 → 开始运行
+  "管家先整理好房间 → 叫醒住户 → 住户在客厅等着
+   → 管家布置好工作台 → 两人一起开工"
 
 CYT2BL3:
   上电 → CM0+ 跑 ROM → 验证签名 → 跑 Flash Boot
@@ -194,11 +283,82 @@ CYT2BL3 的每个步骤都是汽车功能安全要求的：
 
 这些 STM32H7 都没有！
 因为 STM32H7 是通用 MCU，CYT2BL3 是汽车安全 MCU。
+
+────────────────────────────────────────────
+
+ESP32-S3 对比：IoT 安全 vs 汽车安全
+
+  ESP32-S3 Secure Boot V2     CYT2BL3 安全启动
+  ─────────────────────        ────────────────
+  基于 RSA-PSS 签名            基于 HSM 硬件安全模块
+  公钥烧在 eFuse               签名由 Infineon 签发
+  编译时链入 Bootloader        芯片厂预置在 Mask ROM
+  可在开发阶段关闭              SECURE 模式下强制开启
+  
+  ⚠️ ESP32-S3 的安全启动可跳     ❌ CYT2BL3 绕不过
+  过（开发模式），CYT2BL3       （不可降级，不可关闭）
+  在生产模式才强制
+
+  ESP32-S3: IoT 级安全     CYT2BL3: 汽车级安全 (ASIL-B)
+  消费电子、智能家居        制动、转向、ADAS
+```
+
+### 3.4 ESP32-S3 vs CYT2BL3：相似又不同的两兄弟
+
+```
+               ESP32-S3                   CYT2BL3
+               ────────                   ────────
+相似点:
+  ✅ 主核先启动，辅核被复位               ✅ 主核先启动，辅核被复位
+  ✅ 主核完成初始化后才释放辅核           ✅ 主核完成验证后才释放辅核  
+  ✅ 复位时辅核不可调试                   ✅ 复位时辅核不可调试
+  ✅ 有安全启动机制                       ✅ 有安全启动机制
+  ✅ 使用 eFuse 存储安全配置              ✅ 使用 eFuse 存储安全配置
+
+不同点:
+  ❌ Xtensa 对称核心                      ❌ ARM 异构核心 (M0+ vs M4F)
+     "两个一样的工人"                        "一个小管家 + 一个大工程师"
+     
+  ❌ Secure Boot 基于软件+RSA             ❌ 安全启动基于硬件 HSM
+     可跳过（开发模式）                      不可跳过（SECURE 模式强制）
+     
+  ❌ IoT 级安全                            ❌ 汽车级安全 (ISO 26262 ASIL-B)
+     固件被篡改→芯片不启动                   固件被篡改→芯片锁死+需要4S店
+     
+  ❌ Flash 加密可选                        ❌ 多级 Flash 保护 (SROM API)
+     主核直接操作 Flash                      只有 CM0+ 能操作关键 Flash 区域
+     
+   ❌ 调试: JTAG (probe-rs v0.31+ ✅)       ❌ 调试: SWD (probe-rs ❌)
+      复位后 PRO CPU 可达                     复位后 CM0+ 可达 (但被保护)
+      APP CPU 等释放                          CM4 等 CM0+ 释放
+```
+
+### 3.5 双核启动的"主从谱系"
+
+```
+  "平等"                                          "严格控制"
+    │                                                │
+RP2040    STM32H7    LPC55    ESP32-S3    CYT2BL3
+  │          │         │         │           │
+  │          │         │         │           └─ 汽车MCU | probe-rs: ❌
+  │          │         │         │              主从+安全+异构(不对等)
+  │          │         │         │
+  │          │         │         └─ IoT MCU | probe-rs: ✅ (v0.31+)
+  │          │         │            主从+安全+对称
+  │          │         │
+  │          │         └─ 通用/安全 MCU | probe-rs: ✅
+  │          │            对称+可配
+  │          │
+  │          └─ 高性能通用 MCU | probe-rs: ✅
+  │             非对称+灵活
+  │
+  └─ 低成本通用 MCU | probe-rs: ✅
+     对称+极简
 ```
 
 ---
 
-## 四、对 probe-rs 的影响
+## 四、对调试工具的影响
 
 ```
 RP2040 / STM32H7 / LPC55:
@@ -206,11 +366,23 @@ RP2040 / STM32H7 / LPC55:
   → halt → 等待 → 成功
   → 原因: 复位后所有核的 SWD 都可达
 
+ESP32-S3:
+  → probe-rs v0.31+ 已支持 (Xtensa 架构已加入)
+  → 支持 Flash 烧录、调试、RTT
+  → 复位后只有 PRO CPU 可达 (通过 JTAG)
+  → APP CPU 需等 PRO CPU 释放后才能调试
+  → probe-rs 内部已有 ESP32-S3 的 reset sequence 适配
+  → 同时也支持 OpenOCD (ESP-IDF 自带配置)
+     📚 来源: probe-rs v0.31.0 release notes
+       "ESP32-S3: fixed flashing empty devices"
+       "Change reset sequence for ESP32 Xtensa devices"
+
 CYT2BL3:
   → probe-rs 的标准复位序列必然失败
   → halt → 超时 → SwdDpError
   → 原因: 复位后 CM4 不存在于总线上！
   → 需要: 先连 CM0+ → 等它完成认证 → 确认 CM4 释放 → 再连 CM4
+  → probe-rs 需要特殊适配 (我们的 YAML + Flash 算法)
 ```
 
 ---
@@ -222,12 +394,18 @@ CYT2BL3:
 ║                                                              ║
 ║  CYT2BL3 不是"怪"，是"汽车级"：                              ║
 ║                                                              ║
-║  RP2040  = 共享单车的锁 (踢开就走)                           ║
-║  STM32H7 = 家用门锁 (拧一下钥匙)                             ║
-║  CYT2BL3 = 银行金库门 (指纹+密码+钥匙+保安确认)              ║
+║  RP2040   = 共享单车的锁 (踢开就走)                          ║
+║  STM32H7  = 家用门锁 (拧一下钥匙)                            ║
+║  ESP32-S3 = 酒店门禁 (管家刷卡→引导入住)                     ║
+║  CYT2BL3  = 银行金库门 (指纹+密码+钥匙+保安确认)             ║
 ║                                                              ║
-║  probe-rs 目前只会开前两种锁，还没学会开金库门。              ║
-║  但我们的 YAML + Flash 算法已经准备好了，                     ║
+║  ESP32-S3 和 CYT2BL3 的相似性揭示了：                         ║
+║  "主核先跑、辅核后放" 是带安全启动芯片的通用模式。           ║
+║  差异在于安全等级不同：IoT 可以跳过安检，汽车必须过安检。    ║
+║                                                              ║
+║  probe-rs 已支持前四者 (v0.31+ 加入 Xtensa)，                     ║
+║  但还没学会开银行金库门。                                          ║
+║  我们的 YAML + Flash 算法已经准备好了，                             ║
 ║  等它学会开金库门那天，直接就能用。                           ║
 ║                                                              ║
 ╚══════════════════════════════════════════════════════════════╝
@@ -235,4 +413,7 @@ CYT2BL3:
 
 ---
 
-*报告版本：v1.0 | 2026-05-04 | 基于各芯片 Datasheet 及社区文档*
+*报告版本：v2.1 | 2026-05-04 | 基于各芯片 Datasheet 及官方文档*
+*新增 ESP32-S3 (乐鑫) — 参考 ESP-IDF Programming Guide & probe-rs v0.31 release notes*
+*原四芯片对比保留完整，ESP32-S3 作为新章节插入*
+*修正: FreeRTOS 是 ESP-IDF 软件选择（非硅片硬件强制）；probe-rs 已支持 Xtensa/ESP32-S3*
