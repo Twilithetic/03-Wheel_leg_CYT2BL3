@@ -13,7 +13,7 @@ BUILD_DIR = build
 
 # ========== Cortex-M4F 编译标志 ==========
 CPU_FLAGS   = -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16
-C_DEFS      = -D__CORTEX_M4 -D__FPU_PRESENT=1 -DCYT2BL3
+C_DEFS     = -D__CORTEX_M4 -DCYT2BL3
 C_FLAGS     = $(CPU_FLAGS) $(C_DEFS) -std=c11 -O0 -g3 -Wall -Wextra
 C_FLAGS    += -ffunction-sections -fdata-sections -fno-common
 AS_FLAGS    = $(CPU_FLAGS) -g
