@@ -119,19 +119,23 @@ SECTIONS
         PROVIDE(__StackTop = __stack_end__);
     } > SRAM
 
-    /* ========== 段复制/清零表 ========== */
-    __copy_table_start__ = .;
-    LONG(LOADADDR(.data))
-    LONG(ADDR(.data))
-    LONG(SIZEOF(.data) / 4)
-    __copy_table_end__ = .;
+    /* ========== 段复制/清零表 (放在 FLASH 中) ========== */
+    .copy_table :
+    {
+        __copy_table_start__ = .;
+        LONG(LOADADDR(.data))
+        LONG(ADDR(.data))
+        LONG(SIZEOF(.data) / 4)
+        __copy_table_end__ = .;
+    } > FLASH
 
-    __zero_table_start__ = .;
-    LONG(ADDR(.bss))
-    LONG(SIZEOF(.bss) / 4)
-    LONG(ADDR(.heap))
-    LONG(SIZEOF(.heap) / 4)
-    __zero_table_end__ = .;
+    .zero_table :
+    {
+        __zero_table_start__ = .;
+        LONG(ADDR(.bss))
+        LONG(SIZEOF(.bss) / 4)
+        __zero_table_end__ = .;
+    } > FLASH
 
     /* ========== 调试符号 ========== */
     PROVIDE(end = __heap_end__);

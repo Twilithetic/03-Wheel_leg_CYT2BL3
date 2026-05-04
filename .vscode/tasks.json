@@ -2,39 +2,56 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "build",
+            "label": "🔨 build",
             "type": "shell",
-            "command": "${command:eide.project.build}",
-            "group": "build",
-            "problemMatcher": []
+            "command": "make",
+            "args": ["all"],
+            "group": {"kind": "build", "isDefault": true},
+            "options": {
+                "env": {
+                    "PATH": "C:\\Users\\29344\\.eide\\bin\\builder\\msys\\bin;${env:PATH}"
+                }
+            },
+            "problemMatcher": ["$gcc"],
+            "presentation": {"reveal": "always", "panel": "dedicated"}
         },
         {
-            "label": "flash",
+            "label": "🧹 clean",
             "type": "shell",
-            "command": "${command:eide.project.uploadToDevice}",
+            "command": "make",
+            "args": ["clean"],
             "group": "build",
-            "problemMatcher": []
+            "options": {
+                "env": {
+                    "PATH": "C:\\Users\\29344\\.eide\\bin\\builder\\msys\\bin;${env:PATH}"
+                }
+            }
         },
         {
-            "label": "build and flash",
+            "label": "🔄 rebuild",
             "type": "shell",
-            "command": "${command:eide.project.buildAndFlash}",
+            "command": "make",
+            "args": ["clean", "all"],
             "group": "build",
-            "problemMatcher": []
+            "options": {
+                "env": {
+                    "PATH": "C:\\Users\\29344\\.eide\\bin\\builder\\msys\\bin;${env:PATH}"
+                }
+            },
+            "problemMatcher": ["$gcc"]
         },
         {
-            "label": "rebuild",
+            "label": "🔥 flash",
             "type": "shell",
-            "command": "${command:eide.project.rebuild}",
+            "command": "make",
+            "args": ["flash"],
             "group": "build",
-            "problemMatcher": []
-        },
-        {
-            "label": "clean",
-            "type": "shell",
-            "command": "${command:eide.project.clean}",
-            "group": "build",
-            "problemMatcher": []
+            "options": {
+                "env": {
+                    "PATH": "C:\\Users\\29344\\.eide\\bin\\builder\\msys\\bin;${env:PATH}"
+                }
+            },
+            "dependsOn": ["🔨 build"]
         }
     ]
 }

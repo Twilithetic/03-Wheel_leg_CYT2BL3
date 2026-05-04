@@ -1,0 +1,3 @@
+[submodule "libs/core-lib"]
+	path = libs/core-lib
+	url = https://github.com/Infineon/core-lib.git

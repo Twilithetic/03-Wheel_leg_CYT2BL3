@@ -1,159 +1,101 @@
 /**
  * @file     main.c
- * @brief    CYT2BL3 PDL + FreeRTOS 示例
+ * @brief    CYT2BL3 极简示例 — 使用 ARMCM4_FP 设备模板
  * 
- * 这个示例展示：
- *   1. PDL 外设初始化 (GPIO LED 闪烁)
- *   2. FreeRTOS 多任务调度
- *   3. 任务间通信 (Queue)
+ * 包含:
+ *   - ARMCM4_FP.h → 提供 IRQn_Type, SystemCoreClock 等 CMSIS 设备定义
+ *   - core_cm4.h   → 自动被 ARMCM4_FP.h 引入
+ *   - CYT2BL3 GPIO 寄存器 → 手动定义
  * 
- * 编译前需要配置：
- *   - CPU Type: Cortex-M4
- *   - FPU: fpv4-sp-d16 (hard float)
- *   - 链接脚本: cyt2bl3_flash.ld
- *   - Include: libs/pdl/devices/COMPONENT_CAT1C/include
- *              libs/pdl/drivers/include
- *              libs/FreeRTOS/include
- *              libs/CMSIS_5/CMSIS/Core/Include
- *              src/
+ * 后续可替换为正式的 CYT2BL 设备头文件
  */
 
-/* PDL 驱动库 */
-#include "cy_pdl.h"
-
-/* FreeRTOS */
-#include "FreeRTOS.h"
-#include "task.h"
-#include "queue.h"
-
-/* 你的 FreeRTOS 配置 */
-#include "FreeRTOSConfig.h"
+#include <stdint.h>
 
 /* ================================================================
- * 全局定义
+ * ARM CMSIS 设备模板 — 提供 IRQn_Type, __NVIC_PRIO_BITS 等
+ * 未来替换为: #include "cyt2bl3.h"
  * ================================================================ */
-
-/* 假设用户 LED 在 P0.5 (根据你的核心板修改！) */
-#define LED_PORT        GPIO_PRT0
-#define LED_PIN         5
-#define LED_DELAY_MS    500
-
-/* UART 调试 (可选，假设 P5.0=TX, P5.1=RX) */
-#define DEBUG_UART      SCB0
+#include "ARMCM4_FP.h"
 
 /* ================================================================
- * FreeRTOS 任务
+ * CYT2BL3 / TRAVEO T2G 外设寄存器地址
+ * (摘自 Infineon Datasheet 002-28876 Rev. *H)
  * ================================================================ */
 
-/**
- * LED 闪烁任务
- * 用 PDL 的 Cy_GPIO 操作 GPIO
- */
-void vLEDTask(void *pvParameters)
-{
-    (void)pvParameters;
+/* --- GPIO Port 基地址 --- */
+#define GPIO_PRT0_BASE      0x40310000UL
 
-    /* 配置 LED 引脚 */
-    cy_stc_gpio_pin_config_t ledConfig = {
-        .outVal    = 0,                              /* 初始低电平 */
-        .driveMode = CY_GPIO_DM_STRONG_IN_OFF,       /* 推挽输出 */
-        .hsiom     = CY_GPIO_HSIOM_SEL_GPIO,         /* GPIO 功能 */
-    };
-    Cy_GPIO_Pin_Init(LED_PORT, LED_PIN, &ledConfig);
-
-    for (;;)
-    {
-        Cy_GPIO_Pin_Inv(LED_PORT, LED_PIN);          /* 翻转 LED */
-        vTaskDelay(pdMS_TO_TICKS(LED_DELAY_MS));     /* 延时 500ms */
-    }
-}
-
-/**
- * 简单计数器任务
- * 演示多任务并行
- */
-void vCounterTask(void *pvParameters)
-{
-    (void)pvParameters;
-    uint32_t count = 0;
-
-    for (;;)
-    {
-        count++;
-        vTaskDelay(pdMS_TO_TICKS(1000));             /* 每秒计数一次 */
-    }
-}
+/* --- GPIO 寄存器偏移 (TRAVEO T2G 通用) --- */
+#define GPIO_OUT_INV_REG    0x0C    /* 输出翻转 */
+#define GPIO_CFG_REG        0x20    /* 引脚配置 (每4位一个引脚) */
 
 /* ================================================================
- * 系统初始化
+ * 全局变量
  * ================================================================ */
+uint32_t SystemCoreClock = 160000000UL;  /* CM4 主频 160MHz */
 
-/**
- * Cy_SystemInit — PDL 系统初始化
- * 由启动汇编调用
- */
+/* ================================================================
+ * Cy_SystemInit — 由启动汇编调用
+ * ================================================================ */
 void Cy_SystemInit(void)
 {
     /* 使能 FPU */
     SCB->CPACR |= ((3UL << 10*2) | (3UL << 11*2));
+    __DSB();
+    __ISB();
+}
 
-    /* 配置系统时钟 (示例: 使用 IMO 8MHz → PLL → 160MHz) */
-    /* TODO: 根据你的核心板时钟方案完善 */
+/* ================================================================
+ * 简易忙等延时 (~160MHz)
+ * ================================================================ */
+static void simple_delay(uint32_t count)
+{
+    while (count--) {
+        __NOP();
+    }
+}
+
+/* ================================================================
+ * GPIO 驱动 (寄存器级)
+ * ================================================================ */
+
+/* 配置 GPIO 引脚为推挽输出 */
+static void gpio_pin_output(uint32_t port_base, uint8_t pin)
+{
+    volatile uint32_t *cfg = (volatile uint32_t *)(port_base + GPIO_CFG_REG);
+    uint32_t shift = (pin % 8) * 4;
+    uint32_t val = *cfg;
+    val &= ~(0x0FUL << shift);   /* 清除旧配置 */
+    val |=  (0x09UL << shift);   /* 0x09: strong drive, output enable */
+    *cfg = val;
+}
+
+/* 翻转 GPIO 引脚 */
+static void gpio_pin_toggle(uint32_t port_base, uint8_t pin)
+{
+    volatile uint32_t *inv = (volatile uint32_t *)(port_base + GPIO_OUT_INV_REG);
+    *inv = (1UL << pin);
 }
 
 /* ================================================================
  * main()
  * ================================================================ */
-
 int main(void)
 {
-    /* PDL 设备初始化 */
-    Cy_SysLib_Delay(10);  /* 短暂延时，等待电源稳定 */
+    /*
+     * 配置 P0.5 为推挽输出
+     * (根据你的核心板原理图修改引脚号！
+     *  核心板原理图: P23.7 接 LED)
+     */
+    gpio_pin_output(GPIO_PRT0_BASE, 5);
 
-    /* 创建 FreeRTOS 任务 */
-    xTaskCreate(
-        vLEDTask,           /* 任务函数 */
-        "LED",              /* 任务名 */
-        configMINIMAL_STACK_SIZE * 2,  /* 栈大小 */
-        NULL,               /* 参数 */
-        1,                  /* 优先级 */
-        NULL                /* 任务句柄 */
-    );
+    /* 主循环 — LED 闪烁 */
+    while (1)
+    {
+        gpio_pin_toggle(GPIO_PRT0_BASE, 5);  /* 翻转 LED */
+        simple_delay(80000000);              /* 大约 500ms @ 160MHz */
+    }
 
-    xTaskCreate(
-        vCounterTask,
-        "Counter",
-        configMINIMAL_STACK_SIZE,
-        NULL,
-        2,
-        NULL
-    );
-
-    /* 启动 FreeRTOS 调度器 */
-    vTaskStartScheduler();
-
-    /* 永远不会执行到这里 */
-    for (;;) {}
     return 0;
-}
-
-/* ================================================================
- * FreeRTOS 内存管理 (heap_4.c 需要)
- * ================================================================ */
-
-/* 如果使用 heap_4.c，需要实现 vApplicationMallocFailedHook */
-void vApplicationMallocFailedHook(void)
-{
-    /* 内存分配失败 — 进入死循环 */
-    taskDISABLE_INTERRUPTS();
-    for (;;) {}
-}
-
-/* 栈溢出钩子 */
-void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
-{
-    (void)xTask;
-    (void)pcTaskName;
-    taskDISABLE_INTERRUPTS();
-    for (;;) {}
 }
