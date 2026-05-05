@@ -7,6 +7,10 @@ SIZE    = C:/Users/29344/.eide/tools/gcc_arm/bin/arm-none-eabi-size.exe
 OBJCOPY = C:/Users/29344/.eide/tools/gcc_arm/bin/arm-none-eabi-objcopy.exe
 GDB     = C:/Users/29344/.eide/tools/gcc_arm/bin/arm-none-eabi-gdb.exe
 
+# ========== 烧录工具 ==========
+OPENOCD         = tools/infineon-openocd/bin/openocd.exe
+OPENOCD_SCRIPTS = tools/infineon-openocd/scripts
+
 # ========== 目标 ==========
 TARGET = firmware
 BUILD_DIR = build
@@ -67,16 +71,19 @@ $(BUILD_DIR)/%.o: %.S
 	@echo "🔧 汇编 $< ..."
 	@$(GCC) -c $(AS_FLAGS) -x assembler-with-cpp $(INCLUDES) $< -o $@
 
-# ========== 烧录 (J-Link) ==========
+# ========== 烧录 (OpenOCD + CMSIS-DAP / WCH-Link) ==========
 flash: $(BUILD_DIR)/$(TARGET).hex
-	@echo "🔥 烧录中 (J-Link)..."
-	@echo "r" > $(BUILD_DIR)/flash.jlink
-	@echo "h" >> $(BUILD_DIR)/flash.jlink
-	@echo "loadfile $(BUILD_DIR)/$(TARGET).hex" >> $(BUILD_DIR)/flash.jlink
-	@echo "r" >> $(BUILD_DIR)/flash.jlink
-	@echo "g" >> $(BUILD_DIR)/flash.jlink
-	@echo "qc" >> $(BUILD_DIR)/flash.jlink
-	@JLink.exe -device CYT2BL3 -if SWD -speed 4000 -autoconnect 1 -CommanderScript $(BUILD_DIR)/flash.jlink
+	@echo "🔥 烧录中 (OpenOCD + WCH-Link)..."
+	@$(OPENOCD) -s "$(OPENOCD_SCRIPTS)" \
+		-f "interface/cmsis-dap.cfg" \
+		-f "target/infineon/cyt2bl.cfg" \
+		-c "adapter speed 2000" \
+		-c "init" \
+		-c "targets traveo2_be_4m.cpu.cm0" \
+		-c "halt 3000" \
+		-c "flash write_image erase $(BUILD_DIR)/$(TARGET).hex" \
+		-c "verify_image $(BUILD_DIR)/$(TARGET).hex" \
+		-c "exit"
 	@echo "✅ 烧录完成！"
 
 # ========== 清理 ==========

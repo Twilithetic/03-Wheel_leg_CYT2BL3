@@ -41,7 +41,7 @@
             "problemMatcher": ["$gcc"]
         },
         {
-            "label": "🔥 flash",
+            "label": "🔥 flash (OpenOCD)",
             "type": "shell",
             "command": "make",
             "args": ["flash"],
@@ -51,7 +51,8 @@
                     "PATH": "C:\\Users\\29344\\.eide\\bin\\builder\\msys\\bin;${env:PATH}"
                 }
             },
-            "dependsOn": ["🔨 build"]
+            "dependsOn": ["🔨 build"],
+            "presentation": {"reveal": "always", "panel": "dedicated"}
         }
     ]
 }
