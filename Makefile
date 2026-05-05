@@ -72,8 +72,17 @@ $(BUILD_DIR)/%.o: %.S
 	@$(GCC) -c $(AS_FLAGS) -x assembler-with-cpp $(INCLUDES) $< -o $@
 
 # ========== 烧录 (OpenOCD + CMSIS-DAP / WCH-Link) ==========
+# 
+# 已知问题:
+#   1. WCH-Link 在芯片复位后 DP 重连失败 → 不能用 "reset init"
+#   2. halt 方式在芯片出厂首次烧录时可用 ✅
+#   3. 重复烧录时 SROM API 可能超时 (CM0+ IRQ0/NVIC 状态异常)
+#
+# 解决办法: 重复烧录前先给板子断电重启 (拔 USB → 等 5 秒 → 插上)
+#
 flash: $(BUILD_DIR)/$(TARGET).hex
 	@echo "🔥 烧录中 (OpenOCD + WCH-Link)..."
+	@echo "   提示: 如果失败请先给板子断电重启再试"
 	@$(OPENOCD) -s "$(OPENOCD_SCRIPTS)" \
 		-f "interface/cmsis-dap.cfg" \
 		-f "target/infineon/cyt2bl.cfg" \
