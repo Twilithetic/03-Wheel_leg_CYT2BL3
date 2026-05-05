@@ -1,6 +1,7 @@
 # ESP32-S3 双核启动流程分析计划
 
-> 归档日期：2026-05-04 | 基于 ESP32-S3 TRM v1.8 + ESP-IDF v6.0.1
+> 归档日期：2026-05-05 | 基于 ESP32-S3 TRM v1.8 + ESP-IDF v6.0.1
+> 更新：新增裸机启动分析 + Bootloader 分层独立性
 
 ---
 
@@ -216,9 +217,163 @@ main task 创建 → app_main() 执行
   └→ app_main()                      FreeRTOS 任务调度
 ```
 
-### 2.4 与其他芯片的关键差异总结
+### 2.4 裸机启动分析 ⭐ 新增
 
-#### 2.4.1 架构对比
+#### 2.4.1 核心问题
+
+> ESP32-S3 可以不用 RTOS 吗？如果不用 RTOS，启动流程还是那样吗？
+
+**答案**：可以不用 RTOS，且前两层（ROM Bootloader + Second Stage Bootloader）完全不受影响。
+
+#### 2.4.2 Bootloader 分层独立性原则
+
+这是本次分析最重要的发现——所有双核芯片的启动流程都遵循**分层独立性**：
+
+```
+层 0: Hardware Power-On Reset       ← 硅片写死，完全不可变
+   │
+层 1: ROM Bootloader (Mask ROM)      ← 芯片出厂固化，不可修改
+   │                                    运行逻辑与 App 无关
+   ├── RP2040:  简单 Boot ROM
+   ├── STM32H7: 无（直接 Flash 向量表）
+   ├── LPC55:   ROM Boot 存在
+   ├── ESP32-S3: 384KB ROM，多模式 Boot
+   └── CYT2BL3: ROM Boot + 🔐安全验证
+   │
+层 2: Flash / Second Stage Boot      ← 位于 Flash 0x0
+   │                                    只负责加载 App
+   │                                    ← 到这一步为止，
+   │                                       RTOS 还不存在！
+   │
+══════════════════════════════════
+   │
+层 3: Application Entry Point        ← 这里才分叉！
+   │
+   ├── [RTOS 路径]
+   │   call_start_cpu0 → start_cpu0
+   │   → FreeRTOS 调度器 → app_main()
+   │
+   └── [裸机路径]
+       自己的 reset handler
+       → 手动初始化 .bss/.data
+       → 手动配置中断向量
+       → 手动设置 CPU 时钟
+       → while(1) { ... }
+       → 完全无调度器
+```
+
+**关键结论**：无论用不用 RTOS，调试器在复位后面对的都是 Layer 0-2 的状态。这就是为什么：
+- RP2040/STM32H7/ESP32-S3 → SWD/JTAG 在复位后立即可达（硬件层已就绪）
+- CYT2BL3 → SWD 不可达（因为 Layer 1 的 ROM Boot 还没释放 CM4 调试总线）
+
+#### 2.4.3 ESP32-S3 裸机方案
+
+##### 方案 A：只用 PRO CPU（最简单）
+
+```
+PRO CPU ROM Boot → 2nd Boot → 你的入口函数
+  ├── 初始化硬件（时钟、GPIO、UART...）
+  └── while(1) {
+        // 你的裸机逻辑
+        // APP CPU 永不释放，永远在复位
+      }
+
+优点：最简单，不用处理双核同步
+缺点：浪费一个核
+```
+
+##### 方案 B：手动释放 APP CPU
+
+```
+PRO CPU 启动
+  ├── 初始化硬件
+  ├── 设置 APP CPU 入口地址 (写 DPORT 寄存器)
+  ├── 释放 APP CPU 复位 (写 RTC_CNTL 寄存器)
+  ├── 等 APP CPU 就绪标志
+  └── while(1) { ... }
+
+APP CPU 醒来
+  ├── 设置就绪标志 → PRO CPU 知道它活了
+  └── while(1) { ... }
+
+双核各自独立运行，通过：
+  • 共享内存 + volatile 变量
+  • 自旋锁（硬件 atomic 指令）
+  • 核间中断（IPI）
+```
+
+##### 方案 C：Rust no_std（社区最成熟方案）
+
+```
+使用 esp-hal + xtensa-lx-rt 生态:
+
+xtensa-lx-rt 做的事（替代 call_start_cpu0）:
+  ├── 设置栈指针
+  ├── 清零 .bss 段
+  ├── 复制 .data 段
+  ├── 设置异常向量表
+  ├── 配置中断级别掩码
+  ├── 调用 #[entry] 标注的 main()
+  └── ← 到这里，没有 FreeRTOS，没有堆分配器
+
+支持的 CPU:
+  • ESP32 (LX6)
+  • ESP32-S2 (LX7)
+  • ESP32-S3 (LX7)
+
+esp-hal 提供的 HAL:
+  • GPIO, UART, SPI, I2C, I2S
+  • Timer, RTC, PWM
+  • 完全 no_std，无 alloc 依赖
+```
+
+#### 2.4.4 裸机下 ESP32-S3 vs CYT2BL3 关键差异
+
+```
+                  ESP32-S3 裸机           CYT2BL3 裸机
+                  ─────────────           ────────────
+Layer 0-2         透明通过 ✅             透明通过 ✅
+                  不需要特殊处理           但 Layer 1 必须验签
+
+PRO CPU/CM0+      可直接在入口写代码       必须先通过 ROM 签名验证
+  App 入口        自由                     被 ROM Boot 控制
+
+APP CPU/CM4       手动释放即可             必须等 CM0+ 跑完 Boot
+  释放            写寄存器                  ROM → Flash Boot → 释放
+
+调试器复位后      PRO CPU 受 JTAG 控制     CM0+ 受 SWD 控制
+                  APP CPU 也可访问         CM4 **不可访问** ❌
+
+裸机可行性        ✅ 完全可行              ✅ 可行但有门槛
+                  社区有完整方案            需要理解 Boot 流程
+```
+
+#### 2.4.5 对调试器开发者的关键启示
+
+```
+ESP32-S3 是理解 CYT2BL3 的最佳 "台阶"：
+
+  理解 RP2040 的对称双核
+       ↓
+  理解 ESP32-S3 的 ROM Boot + 对称双核
+       ↓
+  理解 CYT2BL3 的 ROM Boot + 🔐安全验证 + 非对称双核
+
+  ESP32-S3 的 ROM Boot 让开发者体会到：
+  "原来上电后不是直接跑我的代码，中间还有一层 ROM"
+
+  但 ESP32-S3 的 ROM 是友好的：
+  "你只管写你的 App，ROM 帮你把硬件准备好"
+
+  而 CYT2BL3 的 ROM 是严格的：
+  "你想跑 CM4？先过安检，签名不对就别想"
+```
+
+---
+
+### 2.5 与其他芯片的关键差异总结
+
+#### 2.5.1 架构对比
 
 | 维度 | RP2040 | STM32H7 | ESP32-S3 | CYT2BL3 |
 |------|--------|---------|----------|---------|
@@ -229,7 +384,7 @@ main task 创建 → app_main() 执行
 | 安全启动 | ❌ 无 | ❌ 无 | ⚠️ 可选（eFuse） | 🔐 强制 |
 | 启动耗时 | ~1μs | ~10μs | ~数ms | ~10ms |
 
-#### 2.4.2 ESP32-S3 vs CYT2BL3 核心差异
+#### 2.5.2 ESP32-S3 vs CYT2BL3 核心差异
 
 ```
 相同点:
@@ -250,7 +405,7 @@ main task 创建 → app_main() 执行
   eFuse 一次性，不可逆                    eFuse + SROM API 双重保护
 ```
 
-#### 2.4.3 ESP32-S3 的独特之处
+#### 2.5.3 ESP32-S3 的独特之处
 
 ```
 ✅ 内置 USB Serial/JTAG 控制器 — 不需要外部调试器
@@ -281,21 +436,27 @@ main task 创建 → app_main() 执行
 | ESP32-S3 TRM v1.8 | `esp32-s3_technical_reference_manual_cn.pdf` |
 | ESP-IDF 启动流程 | https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-guides/startup.html |
 | ESP-IDF Bootloader | https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-guides/bootloader.html |
+| esp-hal (Rust no_std HAL) | https://github.com/esp-rs/esp-hal |
+| xtensa-lx-rt (最小运行时) | https://github.com/esp-rs/esp-hal/tree/main/xtensa-lx-rt |
 
 ### 3.3 修改内容清单
 
-- [x] 第 1 节：速览表格增加 ESP32-S3
-- [x] 第 2 节：新增 2.4 ESP32-S3 启动流程（含流程图 + 特点 + 对比）
-- [x] 第 3 节：更新 3.1 对比图、3.2 复杂度对比、3.3 安全层次对比
-- [x] 第 4 节：更新 probe-rs 影响分析
-- [x] 第 5 节：更新总结
-- [x] 版本号更新为 v1.1
+- [x] 第 1 节：速览表格增加 ESP32-S3 (v1.1)
+- [x] 第 2 节：新增 2.4 ESP32-S3 启动流程（含流程图 + 特点 + 对比）(v1.1)
+- [x] 第 2 节：新增 🔶 ESP32-S3 裸机启动变体 (v1.2)
+- [x] 第 2 节：新增 2.6 Bootloader 分层独立性分析 (v1.2)
+- [x] 第 2 节：新增 2.7 各芯片裸机支持一览 (v1.2)
+- [x] 第 3 节：更新 3.1 对比图（加入裸机维度）(v1.2)
+- [x] 第 3 节：更新 3.2 复杂度对比、3.3 安全层次对比 (v1.1)
+- [x] 第 4 节：更新调试工具影响分析 (v1.1)
+- [x] 第 5 节：更新总结 (v1.2)
+- [x] 版本号更新为 v1.2
 
 ---
 
 ## 四、关键发现
 
-### ESP32-S3 的启动流程在安全谱系中的位置
+### 4.1 ESP32-S3 的启动流程在安全谱系中的位置
 
 ```
 安全强度: 低 ──────────────────────────────→ 高
@@ -310,7 +471,31 @@ main task 创建 → app_main() 执行
   - CYT2BL3 从头就是安全的，没有"可选"的余地
 ```
 
-### 对调试器开发者的启示
+### 4.2 Bootloader 分层独立性 — 最重要的发现 ⭐
+
+```
+本次分析最重要的认知突破：
+
+  "Bootloader 不绑定 RTOS，RTOS 只在 App 层才存在"
+  
+  这个原则适用于所有五款芯片！！！
+  
+  具体来说:
+    层 0-1 (硬件 + ROM Boot)    → 硅片固化，RTOS 无关
+    层 2   (Flash/2nd Boot)     → 只管加载，RTOS 无关  
+    层 3   (App Entry Point)    → 这里才决定用不用 RTOS
+    
+  为什么这很重要？
+    ✅ 解答了"ESP32-S3 可以不用 RTOS 吗" → 完全可以
+    ✅ 解释了为什么 CYT2BL3 的调试器问题出在 Layer 1 而非 Layer 3
+    ✅ 统一了五款芯片的启动认知模型
+    ✅ 为 probe-rs CYT2BL3 适配提供了清晰的思路：
+       我们的 YAML + Flash 算法本质上是在 Layer 2 注入代码
+       让 Layer 1 (CM0+ ROM Boot) 完成安全验证后
+       Layer 3 的 CM4 能被调试器正常抓到
+```
+
+### 4.3 对调试器开发者的启示
 
 ```
 ESP32-S3 是 CYT2BL3 probe-rs 开发的最佳"中间参考"：
@@ -323,6 +508,12 @@ ESP32-S3 是 CYT2BL3 probe-rs 开发的最佳"中间参考"：
   
   理解了 ESP32-S3 的 ROM Boot 流程后，
   再理解 CYT2BL3 的 SROM 安全启动就容易多了！
+
+  裸机视角的附加价值:
+  通过对比 ESP32-S3 RTOS vs 裸机的启动差异，
+  可以更清晰地分离"芯片必须做的事"（Layer 0-2）
+  和"RTOS 框架做的事"（Layer 3），
+  这对理解 CYT2BL3 的 CM0+→CM4 启动链条至关重要。
 ```
 
 ---
