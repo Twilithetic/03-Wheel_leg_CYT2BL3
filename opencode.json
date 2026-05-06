@@ -1,0 +1,6 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "DeepSeek/Deepseek V4 Pro",
+  "default_agent": "Caring-Tech-Sister" 
+  
+}

@@ -111,14 +111,50 @@ APnDP=0, RnW=0, A2=1, A3=0 → XOR=1 (奇数) → Parity=1
 
 #### 2.2.3 ACK 应答 (3 bits, Target→Host, LSB first)
 
-| ACK[2:0] | 含义 | 说明 |
-|----------|------|------|
-| `001` (1) | **OK** | 操作成功，将有数据阶段 |
-| `010` (2) | **WAIT** | 目标忙，需重试 (无数据阶段) |
-| `100` (4) | **FAULT** | 错误 (sticky flag 置位)，无数据阶段 |
-| `111` (7) | **No Response** | 目标未连接/协议错误 |
+> 依据: ADIv5 §4.3.4-§4.3.6, Table 4-1 through Table 4-5
 
-> 注意: ACK 值按 LSB first 传输，所以收到 `100` 表示 FAULT，收到 `001` 表示 OK。
+| ACK[2:0] | 值 | 含义 | 触发条件 | 数据阶段? |
+|----------|----|------|---------|:--:|
+| `001` | 1 | **OK** | DP 就绪，无错误 | ✅ 有 (读=33bit RDATA, 写=33bit WDATA) |
+| `010` | 2 | **WAIT** | 前一个 DP/AP 操作未完成 | ❌ 无 (除非 overrun detection 使能) |
+| `100` | 4 | **FAULT** | CTRL/STAT 中任意 sticky flag=1 | ❌ 无 (除非 overrun detection 使能) |
+| `111` | — | **No Response** | 目标未驱动线路(协议错误/未连接) | — |
+
+> **重要发现** (ADIv5 §4.3.4-§4.3.5): 
+> - **DPIDR 和 CTRL/STAT 寄存器读取**必须**始终返回 OK**，绝不允许 WAIT 或 FAULT
+> - **ABORT 寄存器写入**也必须始终返回 OK
+> - 如果 DPIDR 读收到非 OK 响应，说明物理连接有问题或目标不在 SWD 模式
+
+**NACK (111) 的本质** (ADIv5 §4.3.6 Protocol error response):
+收到全 `111` **不是目标主动发送的 NACK 响应**。ADIv5 规范中没有定义 "NACK" 这个 ACK 值。全 1 是因为：
+- 目标检测到**协议错误**（Parity 不匹配、Stop ≠ 0、Park ≠ 1）→ 进入**协议错误状态**
+- 在协议错误状态下，目标**不驱动 SWDIO 线路**
+- CMSIS-DAP 探针读取到的是 100kΩ 上拉电阻拉高的 HIGH 电平 → 解析为 `111`
+- probe-rs 将此映射为 `Ack::NoAck`（源码 `transfer/mod.rs:207-214`）
+
+**协议错误状态恢复** (ADIv5 §4.3.6):
+1. 进入协议错误状态后，目标**可能**通过检测到有效的 DPIDR 读来退出（IMPLEMENTATION DEFINED）
+2. 如果目标在协议错误状态下又检测到另一个协议错误 → 进入**锁定状态 (lockout)**
+3. 锁定状态**只能**通过 Line Reset 退出
+4. **SWD v2 实现**：Line Reset 后的第一个数据包如果是协议错误 → 直接进入锁定状态
+
+```
+协议错误状态转移 (ADIv5 §4.3.6):
+  ┌──────────┐  有效 DPIDR 读?  ┌──────────┐
+  │  NORMAL  │ ────────────────→│  NORMAL  │ (IMP DEF)
+  └────┬─────┘                  └──────────┘
+       │ 协议错误
+       ▼
+  ┌──────────┐  再次协议错误  ┌──────────┐
+  │  PROTOCOL │ ────────────→ │  LOCKOUT │ (永久, 需 Line Reset)
+  │  ERROR    │               └──────────┘
+  └────┬─────┘
+       │ Line Reset
+       ▼
+  ┌──────────┐
+  │  RESET   │
+  └──────────┘
+```
 
 #### 2.2.4 写操作的数据阶段 (33 bits, Host→Target)
 
@@ -262,28 +298,120 @@ Bits [3:0]   TYPE         总线类型: 0x1=AHB3
 > 依据: ADIv5 §5.2 (SWD/JTAG 选择), §4.4.3 (线复位), §5.3 (Dormant)
 
 #### 2.6.1 SWD 线复位 (Line Reset)
+
+> 依据: ADIv5 §4.4.3 "Connection and line reset sequence", Figure 4-8
+
+**规范要求**:
 ```
 SWDIO 保持 HIGH ≥50 个 SWCLK 周期
-然后 SWDIO 保持 LOW ≥2 个 SWCLK 周期
+然后 SWDIO 保持 LOW ≥2 个 SWCLK 周期 (Idle cycles)
 ```
+
+**规范原文** (ADIv5 §4.4.3):
+> "A line reset is achieved by holding the data signal HIGH for at least 50 clock cycles, followed by at least two idle cycles."
+> 
+> "When waiting for a packet header, if the target detects a sequence of 50 clock cycles with the data signal held HIGH, followed by at least two idle cycles, it **must** enter the reset state."
+
+**Line Reset 后唯一合法操作** (ADIv5 §4.4.3):
+> "The only valid transactions in reset state are:
+> - A read of the DPIDR register. This takes the connection out of reset state.
+> - One of the switching sequences defined by SWD and JTAG select mechanism, if implemented.
+> - A write to the TARGETSEL register, if SWD protocol version 2 is implemented."
+> 
+> "The behavior of the target is **UNPREDICTABLE** if any other transaction is made in reset state."
+
+**标准 Line Reset 时序图** (ADIv5 Figure 4-8):
+```
+line reset                       DP DPIDR register read
+SWCLK  ──┐   ┌──┐   ┌──   ──┐   ┌──┐   ┌──┐   ┌──┐   ┌──┐   ┌──┐   ┌──┐   ┌──┐   ┌──
+         │   │  │   │   ...   │   │  │   │  │   │  │   │  │   │  │   │  │   │  │   │
+         └───┘  └───┘         └───┘  └───┘  └───┘  └───┘  └───┘  └───┘  └───┘  └───┘
+
+SWDIO   ───────────────────────┐   ┌───┐       ┌───┐   ┌───────┐
+                                │   │   │  1 0 1 0 0 1 0 1       │
+                                └───┘   └───┘   └───┘   └───────┘
+        │←─ ≥50 cycles HIGH ──→│←2→│←── 8-bit request ──→│
+                                  Idle  Start RnW  Parity  Park
+                                         APnDP A[2:3] Stop
+```
+
 probe-rs 实现 (`sequences.rs:1169-1175`):
 ```rust
-interface.swj_sequence(51 + 3, 0x0007_FFFF_FFFF_FFFF)?;
-// 51 bits HIGH + 3 bits LOW = 54 bits total = 54 SWCLK cycles
+fn swd_line_reset(interface: &mut dyn DapProbe, swdio_low_cycles: u8) -> Result<(), ArmError> {
+    assert!(swdio_low_cycles + 51 <= 64);
+    interface.swj_sequence(51 + swdio_low_cycles, 0x0007_FFFF_FFFF_FFFF)?;
+    Ok(())
+}
+// 其中 swdio_low_cycles:
+//   debug_port_setup 中 = 0 (仅 51 HIGH, 无 LOW 尾 — 后面有 JTAG→SWD 序列)
+//   debug_port_connect 中 = 3 (51 HIGH + 3 LOW — 符合 ≥50+≥2 规范)
 ```
 
 #### 2.6.2 JTAG→SWD 切换序列
+
+> 依据: ADIv5 §5.2.1 "Switching from JTAG to SWD operation", Figure 5-3
+
+**规范原文** (ADIv5 §5.2.1):
+> "To switch SWJ-DP from JTAG to SWD operation:
+> 1. Send at least 50 SWCLKTCK cycles with SWDIOTMS HIGH. 
+> 2. Send the 16-bit JTAG-to-SWD select sequence on SWDIOTMS.
+> 3. Send at least 50 SWCLKTCK cycles with SWDIOTMS HIGH."
+
+**JTAG-to-SWD 序列** (ADIv5 §5.2.1):
 ```
-1. ≥50 cycles SWDIO/TMS HIGH (确保 JTAG TAP 在 Test-Logic-Reset)
-2. 16-bit sequence: 0xE79E (LSB first) = 0b0111_1001_1110_0111 (MSB first)
-3. ≥50 cycles SWDIO/TMS HIGH (确保 SWD 在线复位状态)
-```
-probe-rs 实现:
-```rust
-interface.swj_sequence(16, 0xE79E)?;
+16-bit: 0b0111100111100111, MSB first  →  0x79E7 (MSB first)
+        0xE79E (LSB first)              →  probe-rs 使用此格式
 ```
 
-#### 2.6.3 CMSIS-DAP DAP_Transfer 命令
+**规范时序图** (ADIv5 Figure 5-3):
+```
+SWCLKTCK ──┐   ┌──┐   ┌──   ──┐   ┌──┐   ┌──┐   ┌──┐   ┌──┐   ┌──┐   ┌──   ──┐   ┌──
+           │   │  │   │   ...   │   │  │   │  │   │  │   │  │   │  │   │  │        │   │
+           └───┘  └───┘         └───┘  └───┘  └───┘  └───┘  └───┘  └───┘  └──      ┘   └──
+
+SWDIOTMS  ───────────────────────┐ ┌─┐ ┌───┐ ┌───┐ ┌─┐ ┌───┐ ┌───┐ ┌─┐ ┌─┐ ┌─────────────
+                                  │ │ │ │   │ │   │ │ │ │   │ │   │ │ │ │ │
+                                  └─┘ └─┘   └─┘   └─┘ └─┘   └─┘   └─┘ └─┘ └─┘
+          │←─ ≥50 cycles HIGH ──→│←── 16-bit JTAG-to-SWD sequence ──→│← ≥50 HIGH →│
+           (确保当前接口在复位状态)  0 1 1 1 1 0 0 1 1 1 1 0 0 1 1 1   (确保 SWD 在线
+                                   = 0xE79E LSB first                  复位状态)
+```
+
+probe-rs 实现 (`sequences.rs:588-593`):
+```rust
+// Execute SWJ-DP Switch Sequence JTAG to SWD (0xE79E).
+interface.swj_sequence(16, 0xE79E)?;
+// > 50 cycles SWDIO/TMS High, at least 2 idle cycles.
+// -> done in debug_port_connect
+```
+
+**关键细节** (ADIv5 §5.2.1):
+> "On selecting SWD operation, the SWD interface is in a reset state. See Connection and line reset sequence."
+> 
+> 这意味着 JTAG→SWD 后，SWD 接口进入**复位状态**，只接受 DPIDR 读。
+
+probe-rs 因此在其后调用 `debug_port_connect()` → 做 Line Reset + DPIDR 读，完全符合规范。
+
+#### 2.6.3 SWD→JTAG 切换序列 (备选)
+
+> 依据: ADIv5 §5.2.2
+
+```
+SWD-to-JTAG: 0b0011110011100111, MSB first → 0x3CE7 (MSB first) → 0xE73C (LSB first)
+
+步骤: ≥50 HIGH → 16-bit 序列 → ≥5 HIGH (确保 JTAG TAP 在 TLR)
+```
+
+#### 2.6.4 Dormant 操作
+
+> 依据: ADIv5 §5.3
+
+Dormant 状态是 SWD v2 引入的"第三状态"，允许 SWD、JTAG 和其他协议设备共享同一物理连线。
+
+**从 SWD 到 Dormant**: ≥50 HIGH + 16-bit `0xE3BC` (LSB first)
+**从 Dormant 退出**: 8 HIGH + 128-bit Selection Alert + 4 LOW + Activation Code + ≥50 HIGH
+
+probe-rs 在 `debug_port_setup` 中 `retry>=1` 时会尝试 Dormant 路径。
 
 CMSIS-DAP 将上述 SWD 操作封装在 USB 命令中：
 
@@ -805,6 +933,80 @@ Target 返回的字节:
 | `probe-rs/src/flashing/flash_algorithm.rs` | Flash 算法结构定义 |
 | `probe-rs/src/flashing/loader.rs` | Flash 数据加载器 |
 | `probe-rs/targets/CYT2BL_Series.yaml` | CYT2BL3 目标定义 (核心, Flash 算法, 内存映射) |
+
+---
+
+## 附录: ADIv5 规范对照 — NACK 问题根因分析
+
+> 本节将实测中遇到的 NACK 现象与 ADIv5 规范原文进行逐条对照。
+
+### A.1 NACK (ACK=111) 不是合法的 ACK 响应
+
+**规范原文** (ADIv5 §4.3.4-§4.3.6, Table 4-1～4-4):
+
+| ACK | 二进制 | 规范定义 |
+|:---:|--------|---------|
+| OK | `001` | DP 就绪，操作成功 |
+| WAIT | `010` | 前序操作未完成 |
+| FAULT | `100` | Sticky flag 置位 |
+
+**没有 `111` 这个值。** ADIv5 Table 4-5 将 "No ACK" 定义为 "line is not driven"（线路无人驱动），而不是一个发送的值。
+
+**结论**: probe-rs 日志中的 "NACK" 实际上是 CMSIS-DAP 探针读取到**目标未驱动线路**时的上拉电平，被解析为 `Ack::NoAck`。
+
+### A.2 为什么目标不响应 (No ACK)
+
+**规范原文** (ADIv5 §4.3.6 "Protocol error response"):
+> "When a protocol error is detected by the SW-DP, the SW-DP does not reply to the packet request and does not drive the line."
+
+协议错误触发条件:
+- Parity 位与请求头不匹配
+- Stop 位 ≠ 0
+- Park 位 ≠ 1
+
+**规范原文** (ADIv5 §4.3.6, 续):
+> "When in protocol error state:
+> - If the target detects a valid read of the DP DPIDR register, it is **IMPLEMENTATION DEFINED** whether the target leaves the protocol error state, and gives an OK response.
+> - If the target detects a valid packet header, other than the read of the DP DPIDR register, or the target detects an **IMPLEMENTATION DEFINED** number of additional protocol errors, it enters the **lockout state**."
+> 
+> "The target must leave the protocol error state on a line reset."
+
+**结论**: 如果目标进入了协议错误状态或锁定状态，Line Reset 是**唯一可靠的恢复方式**。probe-rs 的 `debug_port_connect` 每次重试前都做 Line Reset，这一点是正确的。
+
+### A.3 SWD v2 的额外限制
+
+**规范原文** (ADIv5 §4.3.6):
+> "If the SW-DP implements SWD protocol version 2, it must enter the lockout state after a single protocol error immediately after a line reset."
+
+CYT2BL3 使用 DPv2 (实测 DPIDR 版本字段=0x2)，如果它实现了 SWD v2 协议，则 **Line Reset 后的第一个数据包如果是协议错误 → 直接锁定**。这意味着如果 WCH-Link 发送的 SWD 包有任何位错误（即使只是时钟/时序问题），芯片会锁定，后续所有 Line Reset+DPIDR 读也全部失败。
+
+### A.4 DPIDR 读必须是 OK
+
+**规范原文** (ADIv5 Table 4-1):
+> "The SW-DP must always give an OK response to a read of the IDCODE or CTRL/STAT register."
+
+如果 DPIDR 读返回的不是 OK（而是 No Response = 线路未驱动），说明：
+1. 物理连接有问题，或
+2. 目标不在 SWD 模式（可能仍在 JTAG 模式），或
+3. 目标处于锁定/掉电状态
+
+### A.5 复位后的 DAP 重连要求
+
+**规范原文** (ADIv5 §5.1.1 "SWJ-DP structure"):
+> "This means that tools must not rely on the state of either DP, or any AP accessed through the DP, persisting when the other DP is selected. On switching DPs, the debugger must re-initialize the DAP, including setting the CTRL/STAT.{CDBGPWRUPREQ, CSYSPWRUPREQ} bits correctly."
+
+这解释了为什么 reset 后需要重新上电 DAP — 而 probe-rs 的 `debug_port_start` 在连接后做了这件事（读取 CTRL/STAT → 写 CDBGPWRUPREQ/CSYSPWRUPREQ → 等待确认）。
+
+### A.6 规范与实测的对应关系
+
+| 现象 | ADIv5 规范依据 | 对应 probe-rs 行为 |
+|------|---------------|-------------------|
+| 反复 NACK | §4.3.6 Protocol error → 目标不驱动线路 | `process_batch` 收到 ACK=7 → 返回 `NoAcknowledge` |
+| Line Reset 后仍 NACK | §4.3.6 Lockout 状态需 Line Reset 恢复 | `debug_port_connect` 每次循环都做 Line Reset |
+| JTAG→SWD 后初始连接成功 | §5.2.1 切换序列正确 | `swj_sequence(16, 0xE79E)` ✅ |
+| Reset 后 DP 失联 | §5.1.1 DAP 状态不持久 | `cortex_m_reset_system` 触发 SYSRESETREQ → DP 丢失 |
+| 掉电 DP 不响应 | §2.4 Power control 需先上电 | `debug_port_start` 上电 ✅ (初始连接 OK) |
+| SWD v2 锁定更严格 | §4.3.6 v2 首个错误→直接锁定 | CYT2BL3=DPv2 → 对时序错误更敏感 |
 
 ---
 
