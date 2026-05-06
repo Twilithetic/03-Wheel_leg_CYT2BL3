@@ -1,3 +1,24 @@
 [submodule "libs/core-lib"]
 	path = libs/core-lib
 	url = https://github.com/Infineon/core-lib.git
+[submodule "tools/infineon-packs"]
+	path = tools/infineon-packs
+	url = https://github.com/Infineon/cmsis-packs.git
+[submodule "libs/CMSIS_5"]
+	path = libs/CMSIS_5
+	url = https://github.com/ARM-software/CMSIS_5.git
+[submodule "libs/FreeRTOS"]
+	path = libs/FreeRTOS
+	url = https://github.com/FreeRTOS/FreeRTOS-Kernel.git
+[submodule "libs/hal"]
+	path = libs/hal
+	url = https://github.com/Infineon/mtb-hal-cat1.git
+[submodule "libs/pdl"]
+	path = libs/pdl
+	url = https://github.com/Infineon/mtb-pdl-cat1.git
+[submodule "tools/CMSIS-DAP"]
+	path = tools/CMSIS-DAP
+	url = https://github.com/ARM-software/CMSIS-DAP
+[submodule "tools/probe-rs-src"]
+	path = tools/probe-rs-src
+	url = https://github.com/Twilithetic/probe-rs.git
