@@ -198,11 +198,33 @@ core.reset_and_halt(Duration::from_millis(500))
 Session init 时:
   - debug_core_start → CSW 配置 → DHCSR 写 → core halted
   - 日志: "Core 0 already halted"
+  - core_halted() 返回 true
 
 Flasher::load 时:
-  - 核心已在 halting 状态 → 不需要 reset
+  - 检测到 core_halted() == true → 跳过 reset
   - 直接写入 Flash 算法到 RAM → 执行 → 烧录
 ```
+
+### 3.2b 为什么 `Cyt2bl::reset_system` 不能替代这个改动？
+
+```
+armv6m::reset_and_halt() 的调用链:
+  ┌─ reset_catch_set()          ← 写 DEMCR (DAP ✅)
+  ├─ sequence.reset_system()    ← 我们的 Cyt2bl 代码
+  │    ├─ 写 AIRCR.SYSRESETREQ  ← DAP ✅ (复位前还能用)
+  │    ├─ 等 N ms               ← 等 FlashBoot 配 HSIOM
+  │    └─ probe.reinitialize()  ← 重连 DP... 成功了!
+  │                                   但! ↓
+  └─ self.wait_for_core_halted()  ← 读 DHCSR (走 self.memory)
+       └─ self.memory.read_word_32(...)  💥
+            ↑
+            self.memory 是 ADIMemoryInterface
+            它在 reset_system 之前就创建了
+            reinitialize() 刷新了底层 ArmCommunicationInterface
+            但 ADIMemoryInterface 内部引用已过期!
+```
+
+**架构限制**: probe-rs session 不支持在 `reset_system` 中途刷新 memory interface。`reinitialize()` 在脚下换了地板，但 caller 手里还拿着旧地图。
 
 ### 3.3 核心洞察
 
@@ -232,20 +254,42 @@ Flasher::load 时:
 +     DebugSequence::Arm(Cyt2bl::create())
 ```
 
-### 改动 #3: cortex_m_wait_for_reset 增强
+### 改动 #3: cortex_m_wait_for_reset 防御性增强 (辅助)
 
 ```
 文件: sequences.rs:409-426
 修改: 超时 600ms → 2000ms
-      reinitialize() 失败时继续循环 (不传播错误)
+      reinitialize() 失败时 is_ok() 继续循环 (不用 ? 传播错误)
+作用: 让 DefaultArmSequence 的 reset 也能等更久、更容错
+      注意: Cyt2bl::reset_system 完全重写了逻辑，不走这个函数
 ```
 
-### 改动 #4: 跳过 reset_and_halt (核心修复)
+### 改动 #4: flasher.rs 条件跳过 reset_and_halt (核心修复 ★)
 
 ```
-文件: flasher.rs:199-202
-修改: 注释掉 reset_and_halt 调用
-      核心已在 session init 时 halt，不需要 reset
+文件: flasher.rs:199
+原来:
+  core.reset_and_halt(Duration::from_millis(500))
+      .map_err(FlashError::ResetAndHalt)?;
+  → 无条件 reset → CYT2BL3 的 SWD 断开 → 永久 NACK
+
+现在:
+  let already_halted = core.core_halted().unwrap_or(true);
+  if already_halted {
+      // 核心已在 session init 时 halt → 跳过 reset
+  } else {
+      // 核心未 halt → 正常 reset (STM32 等芯片走这里)
+      core.reset_and_halt(...)?;
+  }
+
+设计思路:
+  - core_halted() 返回 Ok(true)  → 跳过 reset (CYT2BL3 场景 ✅)
+  - core_halted() 返回 Ok(false) → 正常 reset (其他芯片场景 ✅)
+  - core_halted() 返回 Err      → unwrap_or(true)，保守跳过
+    (DAP 不可达时，reset 也必然失败，跳过比做无用功强)
+
+关键:
+  不是全局硬注释! 是智能判断，CYT2BL3 和其他芯片都能正常工作。
 ```
 
 ---
@@ -272,11 +316,25 @@ Flasher::load 时:
 | pdf skill 提取芯片手册 | 获取精确的寄存器/时序信息 |
 | tavily-search 搜索权威文档 | Infineon AN220118 等应用笔记 |
 
-### 5.3 待优化
+### 5.3 最终方案总结
 
-1. `flasher.rs` 的跳过是全局的，应改为通过 `ArmDebugSequence` 控制
-2. Cyt2bl::reset_system 虽然存在但未被调用（client-daemon trace 隔离）
-3. 可进一步实现真正的"复位后轮询 DPIDR"方案
+| 层 | 改了什么 | 为什么 |
+|----|---------|------|
+| `flasher.rs` | `core_halted()?` → 跳过/执行 reset | ★ 核心修复：避免无意义的 reset 断开 SWD |
+| `cyt2bl.rs` | 注册 CYT2BL 专用 sequence | 基础设施：未来可用 `reset_system` 做更智能的复位恢复 |
+| `sequences.rs` | 600ms→2000ms + `?`→`is_ok()` | 防御性增强：对其他芯片也有益 |
+| `infineon/mod.rs` | CYT2BL → Cyt2bl::create() | 加载 sequence |
+
+### 5.4 为什么 flasher.rs 改的是正确的
+
+1. **不是硬注释** — `core_halted().unwrap_or(true)` 意味着：
+   - CYT2BL3: session init 已 halt → `true` → 跳过 ✅
+   - STM32/F3: 可能没 halt → `false` → 正常 reset ✅  
+   - DAP 挂了: → `unwrap_or(true)` → 跳过 → 不会 crash 🔒
+
+2. **不是针对 CYT2BL3 的特殊 case** — 任何"session init 已 halt"的芯片都受益
+
+3. **比 `Cyt2bl::reset_system` 更安全** — 不会触发 "reinitialize 刷新底层但 caller 不知道" 的问题
 
 ---
 
