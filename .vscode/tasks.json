@@ -53,22 +53,82 @@
             "problemMatcher": ["$gcc"]
         },
         {
-            "label": "🔥 flash (OpenOCD)",
+            "label": "🔥 flash (probe-rs)",
             "type": "shell",
-            "command": "make",
-            "args": ["flash"],
-            "group": "build",
+            "command": "${workspaceFolder}\\tools\\probe-rs-src\\target\\release\\probe-rs.exe",
+            "args": [
+                "download",
+                "--chip", "CYT2BL3BAS",
+                "--protocol", "swd",
+                "--speed", "100",
+                "--binary-format", "elf",
+                "${workspaceFolder}\\build\\firmware.elf"
+            ],
             "options": {
                 "shell": {
-                    "executable": "cmd.exe",
-                    "args": ["/c"]
+                    "executable": "pwsh.exe",
+                    "args": ["-Command"]
                 },
                 "env": {
-                    "PATH": "C:\\Users\\29344\\.eide\\bin\\builder\\msys\\bin;${env:PATH}"
+                    "RUST_LOG": "probe_rs=info"
                 }
             },
+            "group": {"kind": "test", "isDefault": true},
             "dependsOn": ["🔨 build"],
+            "presentation": {"reveal": "always", "panel": "dedicated"},
+            "problemMatcher": []
+        },
+        {
+            "label": "📋 probe-rs info",
+            "type": "shell",
+            "command": "${workspaceFolder}\\tools\\probe-rs-src\\target\\release\\probe-rs.exe",
+            "args": [
+                "info",
+                "--protocol", "swd",
+                "--verbose"
+            ],
+
+            "options": {
+                "shell": {
+                    "executable": "pwsh.exe",
+                    "args": ["-Command"]
+                },
+                "env": {
+                    "RUST_LOG": "probe_rs=info"
+                }
+            },
+            "group": "test",
             "presentation": {"reveal": "always", "panel": "dedicated"}
-        }
+        },
+        // {
+        //     "label": "📋 probe-rs info (verbose)",
+        //     "type": "process",
+        //     "command": "${workspaceFolder}\\tools\\probe-rs-src\\target\\release\\probe-rs.exe",
+        //     "args": [
+        //         "info",
+        //         "--protocol", "swd",
+        //         "--verbose"
+        //     ],
+        //     "group": "test",
+        //     "presentation": {"reveal": "always", "panel": "dedicated"}
+        // },
+        // {
+        //     "label": "🔥 flash (OpenOCD) [备用]",
+        //     "type": "shell",
+        //     "command": "make",
+        //     "args": ["flash"],
+        //     "group": "build",
+        //     "options": {
+        //         "shell": {
+        //             "executable": "cmd.exe",
+        //             "args": ["/c"]
+        //         },
+        //         "env": {
+        //             "PATH": "C:\\Users\\29344\\.eide\\bin\\builder\\msys\\bin;${env:PATH}"
+        //         }
+        //     },
+        //     "dependsOn": ["🔨 build"],
+        //     "presentation": {"reveal": "always", "panel": "dedicated"}
+        // }
     ]
 }

@@ -1,7 +1,0 @@
-软件开发环境：
-IAR EW for Arm 9.40.1
-IAR当前（2024.1.15）推荐使用版本：Version: 9.40.1。
-https://pan.baidu.com/s/1BNu17F-bBur_uXkNxwesOw
-通过网盘分享的文件：
-备用链接: https://pan.baidu.com/s/1EcjsYU_iU6I2PcRWkKMbdQ?pwd=8888 
-提取码: 8888
