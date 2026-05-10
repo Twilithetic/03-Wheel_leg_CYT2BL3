@@ -1,0 +1,13 @@
+# probe-rs 配置文件 — 项目根目录
+# https://probe.rs/docs/
+
+[presets.default]
+chip = "CYT2BL3BAS"
+protocol = "swd"
+speed = 100
+
+# 高速模式（可选）
+# [presets.fast]
+# chip = "CYT2BL3BAS"
+# protocol = "swd"
+# speed = 1000

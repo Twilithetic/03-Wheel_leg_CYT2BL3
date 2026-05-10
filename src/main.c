@@ -110,17 +110,7 @@ int main(void)
     /* ---- 1. 配置 LED 引脚 ---- */
     gpio_pin_output(LED_PORT_BASE, LED_PIN);
     LED_OFF();  /* 初始熄灭 (P23.7 输出高电平) */
-
-    /* ---- 2. 配置 SysTick: 1ms 中断 ---- */
-    /* SysTick_Config() 是 CMSIS 标准 API:
-     *   参数 = 两次中断之间的时钟周期数
-     *   SystemCoreClock / 1000 = 160000000 / 1000 = 160000 周期 = 1ms */
-    if (SysTick_Config(SystemCoreClock / 1000))
-    {
-        /* 配置失败 (参数太大) — 死循环 */
-        while (1) {}
-    }
-
+    
     /* ---- 3. 主循环: 500ms 闪烁 ---- */
     while (1)
     {

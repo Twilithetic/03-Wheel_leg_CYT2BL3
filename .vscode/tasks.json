@@ -53,7 +53,7 @@
             "problemMatcher": ["$gcc"]
         },
         {
-            "label": "🔥 flash (probe-rs)",
+            "label": "🔥 probe-rs download (flash)",
             "type": "shell",
             "command": "${workspaceFolder}\\tools\\probe-rs-src\\target\\release\\probe-rs.exe",
             "args": [
@@ -100,35 +100,6 @@
             "group": "test",
             "presentation": {"reveal": "always", "panel": "dedicated"}
         },
-        // {
-        //     "label": "📋 probe-rs info (verbose)",
-        //     "type": "process",
-        //     "command": "${workspaceFolder}\\tools\\probe-rs-src\\target\\release\\probe-rs.exe",
-        //     "args": [
-        //         "info",
-        //         "--protocol", "swd",
-        //         "--verbose"
-        //     ],
-        //     "group": "test",
-        //     "presentation": {"reveal": "always", "panel": "dedicated"}
-        // },
-        // {
-        //     "label": "🔥 flash (OpenOCD) [备用]",
-        //     "type": "shell",
-        //     "command": "make",
-        //     "args": ["flash"],
-        //     "group": "build",
-        //     "options": {
-        //         "shell": {
-        //             "executable": "cmd.exe",
-        //             "args": ["/c"]
-        //         },
-        //         "env": {
-        //             "PATH": "C:\\Users\\29344\\.eide\\bin\\builder\\msys\\bin;${env:PATH}"
-        //         }
-        //     },
-        //     "dependsOn": ["🔨 build"],
-        //     "presentation": {"reveal": "always", "panel": "dedicated"}
-        // }
+
     ]
 }
