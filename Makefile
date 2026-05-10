@@ -10,6 +10,9 @@ GDB     = C:/Users/29344/.eide/tools/gcc_arm/bin/arm-none-eabi-gdb.exe
 # ========== 烧录工具 ==========
 OPENOCD         = tools/infineon-openocd/bin/openocd.exe
 OPENOCD_SCRIPTS = tools/infineon-openocd/scripts
+WCHLINK_SERIAL  = F3EE7D40070E
+# 接口配置: kitprog3 / jlink / cmsis-dap / stlink-v2
+PROBE_IF        = cmsis-dap
 
 # ========== 目标 ==========
 TARGET = firmware
@@ -41,7 +44,7 @@ ASM_OBJS = $(ASM_SRCS:%.S=$(BUILD_DIR)/%.o)
 OBJS     = $(C_OBJS) $(ASM_OBJS)
 
 # ========== 默认目标 ==========
-.PHONY: all clean flash debug
+.PHONY: all clean flash debug check-chip gdb-server debug-cm4 debug-cm0
 
 all: $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).hex $(BUILD_DIR)/$(TARGET).bin
 
@@ -81,10 +84,11 @@ $(BUILD_DIR)/%.o: %.S
 # 解决办法: 重复烧录前先给板子断电重启 (拔 USB → 等 5 秒 → 插上)
 #
 flash: $(BUILD_DIR)/$(TARGET).hex
-	@echo "🔥 烧录中 (OpenOCD + WCH-Link)..."
+	@echo "🔥 烧录中 (OpenOCD + $(PROBE_IF) / WCH-Link)..."
 	@echo "   提示: 如果失败请先给板子断电重启再试"
 	@$(OPENOCD) -s "$(OPENOCD_SCRIPTS)" \
-		-f "interface/cmsis-dap.cfg" \
+		-f "interface/$(PROBE_IF).cfg" \
+		-c "adapter serial $(WCHLINK_SERIAL)" \
 		-f "target/infineon/cyt2bl.cfg" \
 		-c "adapter speed 2000" \
 		-c "init" \
@@ -94,6 +98,51 @@ flash: $(BUILD_DIR)/$(TARGET).hex
 		-c "verify_image $(BUILD_DIR)/$(TARGET).hex" \
 		-c "exit"
 	@echo "✅ 烧录完成！"
+
+# ========== 检测芯片 ==========
+check-chip:
+	@echo "🔍 检测芯片 (OpenOCD + $(PROBE_IF))..."
+	@$(OPENOCD) -s "$(OPENOCD_SCRIPTS)" \
+		-f "interface/$(PROBE_IF).cfg" \
+		-c "adapter serial $(WCHLINK_SERIAL)" \
+		-f "target/infineon/cyt2bl.cfg" \
+		-c "init" \
+		-c "targets" \
+		-c "shutdown"
+
+# ========== GDB Server（后台运行，不退出） ==========
+# 启动后在另一个终端用 "make debug-cm4" 连接
+gdb-server:
+	@echo "📡 启动 GDB Server (OpenOCD + $(PROBE_IF))..."
+	@echo "   CM0+ GDB → localhost:3333"
+	@echo "   CM4  GDB → localhost:3334"
+	@echo "   按 Ctrl+C 停止"
+	@$(OPENOCD) -s "$(OPENOCD_SCRIPTS)" \
+		-f "interface/$(PROBE_IF).cfg" \
+		-c "adapter serial $(WCHLINK_SERIAL)" \
+		-f "target/infineon/cyt2bl.cfg"
+
+# ========== GDB 命令行调试 (CM4) ==========
+debug-cm4: $(BUILD_DIR)/$(TARGET).elf
+	@echo "🐛 连接 GDB → CM4 (localhost:3334)"
+	@echo "   提示: 先用另一个终端运行 'make gdb-server'"
+	@echo "   GDB 命令: break main → continue → step/next/print ..."
+	@$(GDB) -q \
+		-ex "target extended-remote localhost:3334" \
+		-ex "monitor reset init" \
+		-ex "load" \
+		-ex "break main" \
+		-ex "echo ====== 停在 main(), 输入 continue 运行 ======\n" \
+		$(BUILD_DIR)/$(TARGET).elf
+
+# ========== GDB 命令行调试 (CM0+) ==========
+debug-cm0: $(BUILD_DIR)/$(TARGET).elf
+	@echo "🐛 连接 GDB → CM0+ (localhost:3333)"
+	@$(GDB) -q \
+		-ex "target extended-remote localhost:3333" \
+		-ex "monitor reset init" \
+		-ex "load" \
+		$(BUILD_DIR)/$(TARGET).elf
 
 # ========== 清理 ==========
 clean:

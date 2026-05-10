@@ -35,12 +35,56 @@
                 }
             }
         },
+        // {
+        //     "label": "🔄 rebuild",
+        //     "type": "shell",
+        //     "command": "make",
+        //     "args": ["clean", "all"],
+        //     "group": "build",
+        //     "options": {
+        //         "shell": {
+        //             "executable": "cmd.exe",
+        //             "args": ["/c"]
+        //         },
+        //         "env": {
+        //             "PATH": "C:\\Users\\29344\\.eide\\bin\\builder\\msys\\bin;${env:PATH}"
+        //         }
+        //     },
+        //     "problemMatcher": ["$gcc"]
+        // },
+        // {
+        //     "label": "🔥 probe-rs download (flash)",
+        //     "type": "shell",
+        //     "command": "${workspaceFolder}\\tools\\probe-rs-src\\target\\release\\probe-rs.exe",
+        //     "args": [
+        //         "download",
+        //         "--chip", "CYT2BL3BAS",
+        //         "--protocol", "swd",
+        //         "--speed", "100",
+        //         "--binary-format", "elf",
+        //         "${workspaceFolder}\\build\\firmware.elf"
+        //     ],
+        //     "options": {
+        //         "shell": {
+        //             "executable": "pwsh.exe",
+        //             "args": ["-Command"]
+        //         },
+        //         "env": {
+        //             "RUST_LOG": "probe_rs=info"
+        //         }
+        //     },
+        //     "group": {"kind": "test", "isDefault": true},
+        //     "dependsOn": ["🔨 build"],
+        //     "presentation": {"reveal": "always", "panel": "dedicated"},
+        //     "problemMatcher": []
+        // },
         {
-            "label": "🔄 rebuild",
+            "label": "🔥 OpenOCD 烧录 (WCH-Link)",
             "type": "shell",
             "command": "make",
-            "args": ["clean", "all"],
-            "group": "build",
+            "args": ["flash"],
+            "group": {"kind": "test", "isDefault": true},
+            "dependsOn": ["🔨 build"],
             "options": {
                 "shell": {
                     "executable": "cmd.exe",
@@ -50,56 +94,127 @@
                     "PATH": "C:\\Users\\29344\\.eide\\bin\\builder\\msys\\bin;${env:PATH}"
                 }
             },
-            "problemMatcher": ["$gcc"]
-        },
-        {
-            "label": "🔥 probe-rs download (flash)",
-            "type": "shell",
-            "command": "${workspaceFolder}\\tools\\probe-rs-src\\target\\release\\probe-rs.exe",
-            "args": [
-                "download",
-                "--chip", "CYT2BL3BAS",
-                "--protocol", "swd",
-                "--speed", "100",
-                "--binary-format", "elf",
-                "${workspaceFolder}\\build\\firmware.elf"
-            ],
-            "options": {
-                "shell": {
-                    "executable": "pwsh.exe",
-                    "args": ["-Command"]
-                },
-                "env": {
-                    "RUST_LOG": "probe_rs=info"
-                }
-            },
-            "group": {"kind": "test", "isDefault": true},
-            "dependsOn": ["🔨 build"],
             "presentation": {"reveal": "always", "panel": "dedicated"},
             "problemMatcher": []
         },
         {
-            "label": "📋 probe-rs info",
+            "label": "🔥 仅烧录 (不编译)",
             "type": "shell",
-            "command": "${workspaceFolder}\\tools\\probe-rs-src\\target\\release\\probe-rs.exe",
+            "command": "make",
+            "args": ["flash"],
+            "group": "test",
+            "options": {
+                "shell": {
+                    "executable": "cmd.exe",
+                    "args": ["/c"]
+                },
+                "env": {
+                    "PATH": "C:\\Users\\29344\\.eide\\bin\\builder\\msys\\bin;${env:PATH}"
+                }
+            },
+            "presentation": {"reveal": "always", "panel": "dedicated"},
+            "problemMatcher": []
+        },
+        {
+            "label": "🔍 OpenOCD 检测芯片 (WCH-Link)",
+            "type": "shell",
+            "command": "${workspaceFolder}\\tools\\infineon-openocd\\bin\\openocd.exe",
             "args": [
-                "info",
-                "--protocol", "swd",
-                "--verbose"
+                "-s", "${workspaceFolder}\\tools\\infineon-openocd\\scripts",
+                "-f", "interface/cmsis-dap.cfg",
+                "-c", "adapter serial F3EE7D40070E",
+                "-f", "target/infineon/cyt2bl.cfg",
+                "-c", "init",
+                "-c", "targets",
+                "-c", "shutdown"
             ],
-
+            "group": "test",
             "options": {
                 "shell": {
                     "executable": "pwsh.exe",
                     "args": ["-Command"]
-                },
-                "env": {
-                    "RUST_LOG": "probe_rs=info"
                 }
             },
-            "group": "test",
-            "presentation": {"reveal": "always", "panel": "dedicated"}
+            "presentation": {"reveal": "always", "panel": "dedicated"},
+            "problemMatcher": []
         },
+        {
+            "label": "📡 启动 GDB Server (WCH-Link)",
+            "type": "shell",
+            "command": "${workspaceFolder}\\tools\\infineon-openocd\\bin\\openocd.exe",
+            "args": [
+                "-s", "${workspaceFolder}\\tools\\infineon-openocd\\scripts",
+                "-f", "interface/cmsis-dap.cfg",
+                "-c", "adapter serial F3EE7D40070E",
+                "-f", "target/infineon/cyt2bl.cfg"
+            ],
+            "isBackground": true,
+            "group": "test",
+            "options": {
+                "shell": {
+                    "executable": "pwsh.exe",
+                    "args": ["-Command"]
+                }
+            },
+            "presentation": {"reveal": "always", "panel": "dedicated"},
+            "problemMatcher": [
+                {
+                    "pattern": {
+                        "regexp": "Listening on port (\\d+) for gdb connections",
+                        "message": 1
+                    },
+                    "background": {
+                        "activeOnStart": true,
+                        "beginsPattern": "Listening on port",
+                        "endsPattern": "Listening on port"
+                    }
+                }
+            ]
+        },
+        // {
+            "type": "shell",
+            "command": "${workspaceFolder}\\tools\\infineon-openocd\\bin\\openocd.exe",
+            "args": [
+                "-s", "${workspaceFolder}\\tools\\infineon-openocd\\scripts",
+                "-f", "interface/cmsis-dap.cfg",
+                "-c", "adapter serial F3EE7D40070E",
+                "-f", "target/infineon/cyt2bl.cfg",
+                "-c", "init",
+                "-c", "targets",
+                "-c", "shutdown"
+            ],
+            "group": "test",
+            "options": {
+                "shell": {
+                    "executable": "pwsh.exe",
+                    "args": ["-Command"]
+                }
+            },
+            "presentation": {"reveal": "always", "panel": "dedicated"},
+            "problemMatcher": []
+        },
+        // {
+        //     "label": "📋 probe-rs info",
+        //     "type": "shell",
+        //     "command": "${workspaceFolder}\\tools\\probe-rs-src\\target\\release\\probe-rs.exe",
+        //     "args": [
+        //         "info",
+        //         "--protocol", "swd",
+        //         "--verbose"
+        //     ],
+
+        //     "options": {
+        //         "shell": {
+        //             "executable": "pwsh.exe",
+        //             "args": ["-Command"]
+        //         },
+        //         "env": {
+        //             "RUST_LOG": "probe_rs=info"
+        //         }
+        //     },
+        //     "group": "test",
+        //     "presentation": {"reveal": "always", "panel": "dedicated"}
+        // },
 
     ]
 }
