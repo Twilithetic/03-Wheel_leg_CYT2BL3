@@ -110,6 +110,8 @@ int main(void)
     /* ---- 1. 配置 LED 引脚 ---- */
     gpio_pin_output(LED_PORT_BASE, LED_PIN);
     LED_OFF();  /* 初始熄灭 (P23.7 输出高电平) */
+
+    
     
     /* ---- 3. 主循环: 500ms 闪烁 ---- */
     while (1)

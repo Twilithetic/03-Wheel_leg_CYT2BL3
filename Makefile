@@ -74,18 +74,25 @@ $(BUILD_DIR)/%.o: %.S
 	@echo "🔧 汇编 $< ..."
 	@$(GCC) -c $(AS_FLAGS) -x assembler-with-cpp $(INCLUDES) $< -o $@
 
+
 # ========== 烧录 (OpenOCD + CMSIS-DAP / WCH-Link) ==========
-# 
-# 已知问题:
-#   1. WCH-Link 在芯片复位后 DP 重连失败 → 不能用 "reset init"
-#   2. halt 方式在芯片出厂首次烧录时可用 ✅
-#   3. 重复烧录时 SROM API 可能超时 (CM0+ IRQ0/NVIC 状态异常)
 #
-# 解决办法: 重复烧录前先给板子断电重启 (拔 USB → 等 5 秒 → 插上)
+# ⚠️ WCH-Link 烧录 CYT2BL3 当前不可用
+#
+# 根因: WCH-Link 不支持 Test Mode acquire
+#       → 无法在复位后恢复 SWD 连接
+#       → CM0+ 无法获得干净状态
+#       → SROM Flash API 调用超时
+#
+# 替代方案:
+#   1. KitProg3 (随 CYT2BL3 开发板附带)
+#   2. MiniProg4 + KBA 设置
+#   3. J-Link + libusbK 驱动
 #
 flash: $(BUILD_DIR)/$(TARGET).hex
-	@echo "🔥 烧录中 (OpenOCD + $(PROBE_IF) / WCH-Link)..."
-	@echo "   提示: 如果失败请先给板子断电重启再试"
+	@echo "🔥 烧录中 (OpenOCD + $(PROBE_IF))..."
+	@echo "   ⚠️  WCH-Link 烧录 CYT2BL3 可能失败 (Test Mode acquire 缺失)"
+	@echo "   推荐使用 KitProg3 / MiniProg4 / J-Link"
 	@$(OPENOCD) -s "$(OPENOCD_SCRIPTS)" \
 		-f "interface/$(PROBE_IF).cfg" \
 		-c "adapter serial $(WCHLINK_SERIAL)" \
@@ -96,6 +103,24 @@ flash: $(BUILD_DIR)/$(TARGET).hex
 		-c "halt 3000" \
 		-c "flash write_image erase $(BUILD_DIR)/$(TARGET).hex" \
 		-c "verify_image $(BUILD_DIR)/$(TARGET).hex" \
+		-c "exit"
+	@echo "✅ 烧录完成！"
+
+flash: $(BUILD_DIR)/$(TARGET).hex
+	@echo "🔥 烧录中 (OpenOCD + $(PROBE_IF) / WCH-Link)..."
+	@echo "   ⚠️  非首次烧录请先断电重启！或试试 make flash-first"
+	@$(OPENOCD) -s "$(OPENOCD_SCRIPTS)" \
+		-f "interface/$(PROBE_IF).cfg" \
+		-c "adapter serial $(WCHLINK_SERIAL)" \
+		-f "target/infineon/cyt2bl.cfg" \
+		-c "adapter speed 2000" \
+		-c "init" \
+		-c "targets traveo2_be_4m.cpu.cm0" \
+		-c "traveo2 reset_halt" \
+		-c "halt 3000" \
+		-c "flash write_image erase $(BUILD_DIR)/$(TARGET).hex" \
+		-c "verify_image $(BUILD_DIR)/$(TARGET).hex" \
+		-c "reset run" \
 		-c "exit"
 	@echo "✅ 烧录完成！"
 

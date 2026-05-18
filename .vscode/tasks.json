@@ -98,7 +98,7 @@
             "problemMatcher": []
         },
         {
-            "label": "🔥 仅烧录 (不编译)",
+            "label": "🔥 仅烧录 (不编译) ⚠️ WCH-Link可能失败",
             "type": "shell",
             "command": "make",
             "args": ["flash"],

@@ -350,3 +350,50 @@ reset halt
 # 进入调试模式（GDB server，不退出）
 # 不加 -c 命令，OpenOCD 会等待 GDB 连接
 ```
+
+## 已知问题：WCH-Link 烧录 CYT2BL3 失败
+
+### 现象
+
+```
+Warn : [traveo2_be_4m.cpu.cm0] target was in unknown state when halt was requested
+[100%] [################################] [ Erasing     ]  ← 卡住
+Error: timed out while waiting for target halted
+Error: SROM API execution failed. Status: 0x080010DC
+Error: failed erasing sectors 0 to 0
+```
+
+### 根因分析
+
+CYT2BL3 Flash 操作依赖于 **CM0+ 通过 SROM API** 执行。诊断发现：
+
+1. **CM0+ 处于 HardFault 状态** (`xPSR = 0x81000003`, PC = 0x00006B5C)
+2. CM0+ 在 HardFault 中无法响应 SROM IRQ0 → Flash API 调用超时
+3. 需要复位 CM0+ 才能恢复 → 但 WCH-Link **不支持 Test Mode acquire**
+4. 任何形式的系统复位（SYSRESETREQ）都会导致 WCH-Link 丢失 SWD 连接（`cannot read IDR`）
+
+### 已验证无效的方案 ❌
+
+| 方案 | 结果 | 原因 |
+|------|------|------|
+| 断电重启后烧录 | ❌ 仍卡 Erasing | CM0+ 仍进入 HardFault |
+| `traveo2 reset_halt` | ❌ SWD 断连 | 内部触发 SYSRESETREQ |
+| VECTRESET | ❌ 不支持 | Cortex-M0+ 无此功能 |
+| 手动修复 PC/xPSR/SP | ❌ 仍超时 | SROM 调用链需要完整复位初始化 |
+| 降速到 100 kHz | ❌ 同错 | 非速度问题 |
+
+### ✅ 仍能正常使用的功能
+
+- `make check-chip` — 芯片检测、CMSIS-DAP 连接、双核识别
+- `make gdb-server` — 启动 GDB Server（端口 3333/3334）
+- `flash info 0` — 查看 Flash 扇区保护状态
+- 读寄存器/内存（`mdw` / `reg`）
+
+### 推荐方案
+
+| 方案 | 成本 | 说明 |
+|------|------|------|
+| **KitProg3** ⭐ | 随开发板附带 | Infineon 官方调试器，完整 Test Mode acquire |
+| **MiniProg4** | ~200 元 | Infineon 独立调试器 |
+| J-Link + libusbK 驱动 | ~200 元 (EDU Mini) | 需换驱动（见 PDF §1.5.1） |
+| WCH-Link + RST 引脚接 XRES | 需焊接 | 硬件复位可能解决，待验证 |
