@@ -23,8 +23,8 @@ LD_FLAGS += -Wl,--gc-sections -Wl,--print-memory-usage
 
 # ========== Include 路径 ==========
 INCLUDES  = -Isrc
-INCLUDES += -Ilibs/CMSIS_5/CMSIS/Core/Include
-INCLUDES += -Ilibs/CMSIS_5/Device/ARM/ARMCM4/Include
+INCLUDES += -Isrc/infineon_cylibs/CMSIS_5/CMSIS/Core/Include
+INCLUDES += -Isrc/infineon_cylibs/CMSIS_5/Device/ARM/ARMCM4/Include
 
 # ========== 源文件 ==========
 C_SRCS   = src/main.c
