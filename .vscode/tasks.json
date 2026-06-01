@@ -9,8 +9,8 @@
             "group": {"kind": "build", "isDefault": true},
             "options": {
                 "shell": {
-                    "executable": "cmd.exe",
-                    "args": ["/c"]
+                    "executable": "powershell.exe",
+                    "args": ["-Command"]
                 },
                 "env": {
                     "PATH": "C:\\Users\\29344\\.eide\\bin\\builder\\msys\\bin;${env:PATH}"
@@ -29,6 +29,21 @@
                 "shell": {
                     "executable": "cmd.exe",
                     "args": ["/c"]
+                },
+                "env": {
+                    "PATH": "C:\\Users\\29344\\.eide\\bin\\builder\\msys\\bin;${env:PATH}"
+                }
+            }
+        },
+        {
+            "label": "🔄 rebuild",
+            "type": "shell",
+            "command": "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; make rebuild",
+            "group": "build",
+            "options": {
+                "shell": {
+                    "executable": "pwsh.exe",
+                    "args": ["-Command"]
                 },
                 "env": {
                     "PATH": "C:\\Users\\29344\\.eide\\bin\\builder\\msys\\bin;${env:PATH}"

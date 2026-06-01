@@ -36,9 +36,13 @@ ASM_OBJS = $(ASM_SRCS:%.S=$(BUILD_DIR)/%.o)
 OBJS     = $(C_OBJS) $(ASM_OBJS)
 
 # ========== 默认目标 ==========
-.PHONY: build clean
+.PHONY: build clean rebuild
 
 build: $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).hex $(BUILD_DIR)/$(TARGET).bin
+
+# ========== 强制重编 ==========
+rebuild: clean
+	@$(MAKE) build
 
 # ========== 链接 ==========
 $(BUILD_DIR)/$(TARGET).elf: $(OBJS)
@@ -68,6 +72,4 @@ $(BUILD_DIR)/%.o: %.S
 
 # ========== 清理 ==========
 clean:
-	@echo "🧹 Cleaning..."
-	rm -rf $(BUILD_DIR)
-	@echo "✅ Clean done！"
+	@cmd /c "if exist $(BUILD_DIR) rmdir /s /q $(BUILD_DIR)"
